@@ -22,19 +22,42 @@ int freesockwrap(struct sockwrap *sockw);
 int nextchar(struct sockwrap *sockw, char *c);
 int nexttoken(struct sockwrap *sockw, char **s, int token_len, char del);
 
+int validpath(char *path);
+char *trap(char *root, char *path);
+
+int compatible(char *ver1, char *ver2);
+
 int main(int argc, char **argv) {
 	/* Validate arguments */
 	if (argc != 4) {
 		fprintf(stderr, "usage: %s [protocol number] [port number] [web root]\n", argv[0]);
 		return 1;
 	}
-	// TODO: validate arguments... helper function?
+
 	char *protocol = argv[1], *port = argv[2], *root = argv[3];
+	
+	if (strcmp(protocol, "6") != 0 && strcmp(protocol, "4") != 0) {
+		fprintf(stderr, "protocol number must be 4 or 6\n");
+		return 1;
+	}
+	
+	int t = atoi(port); // TODO: do not use atoi
+	if (t < 0 || t >= 65536) {
+		fprintf(stderr, "port must be between 0 and 65535 (inclusive)\n");
+		return 1;
+	}
+
+	if (!validpath(root)) { // TODO: does the folder exist?
+		fprintf(stderr, "web root must be a valid path\n");
+		return 1;
+	}
+
 	struct addrinfo hints, *res;
 
 	/* Specify interface options */
 	memset(&hints, 0, sizeof(struct addrinfo));
-	hints.ai_family = AF_UNSPEC;
+	// hints.ai_family = AF_UNSPEC;
+	hints.ai_family = (strcmp(protocol, "6") == 0) ? AF_INET6 : AF_INET;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE;
 
@@ -101,19 +124,55 @@ int main(int argc, char **argv) {
 	}
 	
 	struct sockwrap *sockw = init_sockwrap(newsockfd, BUFFER_LEN);
-	
-	while (1) {
-		char *s;
-		int n = nexttoken(sockw, &s, TOKEN_LEN, '\n');
-		if (n == 1) {
-			printf("%s\n", s);
-			free(s);
-			fflush(stdout);
-		} else {
-			break;
-		}
+
+	/* Request line */
+	// TODO: package format into a nice struct
+	char *method, *file, *version;
+	if (nexttoken(sockw, &method, TOKEN_LEN, ' ') == -1) {
+		perror("nexttoken");
+		return 1;
+	}
+	if (nexttoken(sockw, &file, TOKEN_LEN, ' ') == -1) {
+		perror("nexttoken");
+		return 1;
+	}
+	if (nexttoken(sockw, &version, TOKEN_LEN, '\n') == -1) {
+		perror("nexttoken");
+		return 1;
 	}
 
+	char *msg;
+	printf("method: %s\n", method);
+	printf("file: %s\n", file);
+	printf("version: %s\n", version);
+
+	if (strcmp(method, "GET") != 0 || validpath(file) == 0 || compatible(version, "HTTP/1.0") == 0) {
+		msg = "HTTP/1.0 400 Invalid request\n\n";
+		send(sockw->sockfd, msg, strlen(msg), 0);
+	} else {
+		char *trapped = trap(root, file);
+		FILE *fp = fopen(trapped, "r");
+		free(trapped);
+		if (fp == NULL) {
+			msg = "HTTP/1.0 404 File not found\n\n";
+			send(sockw->sockfd, msg, strlen(msg), 0);
+		} else {
+			msg = "HTTP/1.0 200 OK\n\n";
+			send(sockw->sockfd, msg, strlen(msg), 0);
+			
+			char buff[20];
+			int nread; 
+			while ((nread = fread(buff, sizeof(char), 20, fp)) > 0) {
+				send(sockw->sockfd, buff, nread, 0);
+			}
+			fclose(fp);
+		}
+	}
+	
+	free(method);
+	free(file);
+	free(version);
+	
 	freesockwrap(sockw);
 	close(sockfd);
 	return 0;
@@ -199,5 +258,19 @@ int nexttoken(struct sockwrap *sockw, char **s, int token_len, char del) { // TO
 
 	t = (char *)realloc(t, (i + 1) * sizeof(char));
 	*s = t;
+	return 1;
+}
+
+int validpath(char *path) { // TODO: implement this
+	return 1;
+}
+
+char *trap(char *root, char *path) { // TODO: implement this
+	char *out = (char *)malloc((strlen(root) + strlen(path) + 1) * sizeof(char));
+	strcpy(out, root);
+	return strcat(out, path);
+}
+
+int compatible(char *ver1, char *ver2) { // TODO: implement this
 	return 1;
 }
