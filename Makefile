@@ -7,4 +7,4 @@ server: $(OBJ)
 	$(CC) $(CFLAGS) -o $(OUT) $(OBJ)
 
 clean:
-	rm -f $(OBJS) $(OUT)
+	rm -f $(OBJ) $(OUT)

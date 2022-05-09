@@ -20,7 +20,7 @@ struct sockwrap {
 struct sockwrap *init_sockwrap(int sockfd, int buff_len);
 int freesockwrap(struct sockwrap *sockw);
 int nextchar(struct sockwrap *sockw, char *c);
-int nexttoken(struct sockwrap *sockw, char **s, int token_len, char del);
+int nexttoken(struct sockwrap *sockw, char *token, int token_len, int *token_n, char *del);
 
 int validpath(char *path);
 char *trap(char *root, char *path);
@@ -127,19 +127,25 @@ int main(int argc, char **argv) {
 
 	/* Request line */
 	// TODO: package format into a nice struct
-	char *method, *file, *version;
-	if (nexttoken(sockw, &method, TOKEN_LEN, ' ') == -1) {
+	char method[TOKEN_LEN + 1], file[TOKEN_LEN + 1], version[TOKEN_LEN + 1];
+	int nread;
+	if (nexttoken(sockw, method, TOKEN_LEN, &nread, " ") == -1) {
 		perror("nexttoken");
 		return 1;
 	}
-	if (nexttoken(sockw, &file, TOKEN_LEN, ' ') == -1) {
+	method[nread] = '\0';
+
+	if (nexttoken(sockw, file, TOKEN_LEN, &nread, " ") == -1) {
 		perror("nexttoken");
 		return 1;
 	}
-	if (nexttoken(sockw, &version, TOKEN_LEN, '\n') == -1) {
+	file[nread] = '\0';
+
+	if (nexttoken(sockw, version, TOKEN_LEN, &nread, "\r\n") == -1) {
 		perror("nexttoken");
 		return 1;
 	}
+	version[nread] = '\0';
 
 	char *msg;
 	printf("method: %s\n", method);
@@ -168,10 +174,6 @@ int main(int argc, char **argv) {
 			fclose(fp);
 		}
 	}
-	
-	free(method);
-	free(file);
-	free(version);
 	
 	freesockwrap(sockw);
 	close(sockfd);
@@ -225,40 +227,43 @@ int nextchar(struct sockwrap *sockw, char *c) {
 }
 
 /* -1: error, 0: disconnect, 1: token received, 2: token too large */
-int nexttoken(struct sockwrap *sockw, char **s, int token_len, char del) { // TODO: support multi-characer delimeters
-	char *t = (char *)malloc((token_len + 1) * sizeof(char)); // TODO: use a buffer instead of allocating each time
-	if (t == NULL) {
+int nexttoken(struct sockwrap *sockw, char *token, int token_len, int *token_n, char *del) {
+	int buff_len = strlen(del), buff_n = 0;
+	char *buff = (char *)malloc(buff_len * sizeof(char)); // TODO: should the size of del be limited to TOKEN_LEN? if so use a static buffer
+	if (buff == NULL) {
 		return -1;
 	}
 	
-	int i, found = 0;
-	char c;
-	for (i = 0; i < token_len + 1; i++) {
-		/* Get the next character */
-		int n = nextchar(sockw, &c);
+	*token_n = 0;
+	while (1) {
+		int n = nextchar(sockw, buff + buff_n); // TODO: handle errors
 		if (n == -1 || n == 0) {
 			return n;
 		}
+		buff_n++;
 
-		/* Found the delimeter */
-		if (c == del) {
-			t[i] = '\0';
-			found = 1;
-			break;
+		if (buff[buff_n - 1] == del[buff_n - 1]) {
+			/* Found the delimeter */
+			if (buff_n == buff_len) {
+				free(buff);
+				return 1;
+			}
+		} else {
+			/* The received token is too long */
+			if (*token_n + buff_n > token_len) {
+				free(buff);
+				return 2;
+			}
+			/* Move the buffer into the token */
+			for (int i = 0; i < buff_n; i++) {
+				token[*token_n + i] = buff[i];
+			}
+			*token_n += buff_n;
+			buff_n = 0;
 		}
-		/* Still in the same token */
-		t[i] = c;
 	}
-
-	/* The token received is too big */
-	if (!found) {
-		free(t);
-		return 2;
-	}
-
-	t = (char *)realloc(t, (i + 1) * sizeof(char));
-	*s = t;
-	return 1;
+	/* We should never get here */
+	return -1;
 }
 
 int validpath(char *path) { // TODO: implement this
