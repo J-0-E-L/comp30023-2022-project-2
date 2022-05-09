@@ -17,7 +17,7 @@ struct sockwrap {
 	char *buff;
 };
 
-struct sockwrap *init_sockwrap(int sockfd, int buff_len);
+struct sockwrap *initsockwrap(int sockfd, int buff_len);
 int freesockwrap(struct sockwrap *sockw);
 int nextchar(struct sockwrap *sockw, char *c);
 int nexttoken(struct sockwrap *sockw, char *token, int token_len, int *token_n, char *del);
@@ -110,74 +110,77 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	/* Accept incoming connections */
-	int newsockfd;
-	struct sockaddr_storage addr;
-	socklen_t socklen = sizeof(struct sockaddr_storage);
-	if ((newsockfd = accept(sockfd, (struct sockaddr *)&addr, &socklen)) == -1) {
-		perror("accept");
-		close(sockfd);
-		return 1;
-	}
-	
-	struct sockwrap *sockw = init_sockwrap(newsockfd, BUFFER_LEN);
+	while (1) {
+		/* Accept incoming connections */
+		int newsockfd;
+		struct sockaddr_storage addr;
+		socklen_t socklen = sizeof(struct sockaddr_storage);
+		if ((newsockfd = accept(sockfd, (struct sockaddr *)&addr, &socklen)) == -1) {
+			perror("accept");
+			close(sockfd);
+			return 1;
+		}
+		
+		struct sockwrap *sockw = initsockwrap(newsockfd, BUFFER_LEN);
 
-	/* Request line */
-	// TODO: package format into a nice struct
-	char method[TOKEN_LEN + 1], file[TOKEN_LEN + 1], version[TOKEN_LEN + 1];
-	int token_n;
-	if (nexttoken(sockw, method, TOKEN_LEN, &token_n, " ") == -1) {
-		perror("nexttoken");
-		return 1;
-	}
-	method[token_n] = '\0';
+		/* Request line */
+		// TODO: package format into a nice struct
+		char method[TOKEN_LEN + 1], file[TOKEN_LEN + 1], version[TOKEN_LEN + 1];
+		int token_n;
+		if (nexttoken(sockw, method, TOKEN_LEN, &token_n, " ") == -1) {
+			perror("nexttoken");
+			return 1;
+		}
+		method[token_n] = '\0';
 
-	if (nexttoken(sockw, file, TOKEN_LEN, &token_n, " ") == -1) {
-		perror("nexttoken");
-		return 1;
-	}
-	file[token_n] = '\0';
+		if (nexttoken(sockw, file, TOKEN_LEN, &token_n, " ") == -1) {
+			perror("nexttoken");
+			return 1;
+		}
+		file[token_n] = '\0';
 
-	if (nexttoken(sockw, version, TOKEN_LEN, &token_n, "\r\n") == -1) {
-		perror("nexttoken");
-		return 1;
-	}
-	version[token_n] = '\0';
+		if (nexttoken(sockw, version, TOKEN_LEN, &token_n, "\r\n") == -1) {
+			perror("nexttoken");
+			return 1;
+		}
+		version[token_n] = '\0';
 
-	char *msg;
-	// printf("method: %s\n", method);
-	// printf("file: %s\n", file);
-	// printf("version: %s\n", version);
+		char *msg;
+		// printf("method: %s\n", method);
+		// printf("file: %s\n", file);
+		// printf("version: %s\n", version);
 
-	if (strcmp(method, "GET") != 0 || validpath(file) == 0 || strcmp(version, "HTTP/1.0") != 0) {
-		msg = "HTTP/1.0 400 Invalid request\r\n\r\n";
-		send(sockw->sockfd, msg, strlen(msg), 0);
-	} else {
-		char *trapped = trap(root, file);
-		FILE *fp = fopen(trapped, "r");
-		free(trapped);
-		if (fp == NULL) {
-			msg = "HTTP/1.0 404 File not found\r\n\r\n";
+		if (strcmp(method, "GET") != 0 || validpath(file) == 0 || strcmp(version, "HTTP/1.0") != 0) {
+			msg = "HTTP/1.0 400 Invalid request\r\n\r\n";
 			send(sockw->sockfd, msg, strlen(msg), 0);
 		} else {
-			msg = "HTTP/1.0 200 OK\r\n\r\n";
-			send(sockw->sockfd, msg, strlen(msg), 0);
-			
-			char buff[20];
-			int nread; 
-			while ((nread = fread(buff, sizeof(char), 20, fp)) > 0) {
-				send(sockw->sockfd, buff, nread, 0);
+			char *trapped = trap(root, file);
+			FILE *fp = fopen(trapped, "r");
+			free(trapped);
+			if (fp == NULL) {
+				msg = "HTTP/1.0 404 File not found\r\n\r\n";
+				send(sockw->sockfd, msg, strlen(msg), 0);
+			} else {
+				msg = "HTTP/1.0 200 OK\r\n\r\n";
+				send(sockw->sockfd, msg, strlen(msg), 0);
+				
+				char buff[20];
+				int nread; 
+				while ((nread = fread(buff, sizeof(char), 20, fp)) > 0) {
+					send(sockw->sockfd, buff, nread, 0);
+				}
+				fclose(fp);
 			}
-			fclose(fp);
 		}
+		
+		freesockwrap(sockw);
+		close(newsockfd);
 	}
-	
-	freesockwrap(sockw);
 	close(sockfd);
 	return 0;
 }
 
-struct sockwrap *init_sockwrap(int sockfd, int buff_len) {
+struct sockwrap *initsockwrap(int sockfd, int buff_len) {
 	struct sockwrap *sockw = (struct sockwrap *)malloc(sizeof(struct sockwrap));
 	if (sockw == NULL) {
 		return NULL;
