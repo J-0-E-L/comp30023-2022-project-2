@@ -25,8 +25,6 @@ int nexttoken(struct sockwrap *sockw, char *token, int token_len, int *token_n, 
 int validpath(char *path);
 char *trap(char *root, char *path);
 
-int compatible(char *ver1, char *ver2);
-
 int main(int argc, char **argv) {
 	/* Validate arguments */
 	if (argc != 4) {
@@ -97,7 +95,6 @@ int main(int argc, char **argv) {
 		/* We have a valid socket */
 		break;
 	}
-	/* Clean up */
 	freeaddrinfo(res);
 	
 	/* None of the interfaces worked */
@@ -128,42 +125,42 @@ int main(int argc, char **argv) {
 	/* Request line */
 	// TODO: package format into a nice struct
 	char method[TOKEN_LEN + 1], file[TOKEN_LEN + 1], version[TOKEN_LEN + 1];
-	int nread;
-	if (nexttoken(sockw, method, TOKEN_LEN, &nread, " ") == -1) {
+	int token_n;
+	if (nexttoken(sockw, method, TOKEN_LEN, &token_n, " ") == -1) {
 		perror("nexttoken");
 		return 1;
 	}
-	method[nread] = '\0';
+	method[token_n] = '\0';
 
-	if (nexttoken(sockw, file, TOKEN_LEN, &nread, " ") == -1) {
+	if (nexttoken(sockw, file, TOKEN_LEN, &token_n, " ") == -1) {
 		perror("nexttoken");
 		return 1;
 	}
-	file[nread] = '\0';
+	file[token_n] = '\0';
 
-	if (nexttoken(sockw, version, TOKEN_LEN, &nread, "\r\n") == -1) {
+	if (nexttoken(sockw, version, TOKEN_LEN, &token_n, "\r\n") == -1) {
 		perror("nexttoken");
 		return 1;
 	}
-	version[nread] = '\0';
+	version[token_n] = '\0';
 
 	char *msg;
-	printf("method: %s\n", method);
-	printf("file: %s\n", file);
-	printf("version: %s\n", version);
+	// printf("method: %s\n", method);
+	// printf("file: %s\n", file);
+	// printf("version: %s\n", version);
 
-	if (strcmp(method, "GET") != 0 || validpath(file) == 0 || compatible(version, "HTTP/1.0") == 0) {
-		msg = "HTTP/1.0 400 Invalid request\n\n";
+	if (strcmp(method, "GET") != 0 || validpath(file) == 0 || strcmp(version, "HTTP/1.0") != 0) {
+		msg = "HTTP/1.0 400 Invalid request\r\n\r\n";
 		send(sockw->sockfd, msg, strlen(msg), 0);
 	} else {
 		char *trapped = trap(root, file);
 		FILE *fp = fopen(trapped, "r");
 		free(trapped);
 		if (fp == NULL) {
-			msg = "HTTP/1.0 404 File not found\n\n";
+			msg = "HTTP/1.0 404 File not found\r\n\r\n";
 			send(sockw->sockfd, msg, strlen(msg), 0);
 		} else {
-			msg = "HTTP/1.0 200 OK\n\n";
+			msg = "HTTP/1.0 200 OK\r\n\r\n";
 			send(sockw->sockfd, msg, strlen(msg), 0);
 			
 			char buff[20];
@@ -236,7 +233,7 @@ int nexttoken(struct sockwrap *sockw, char *token, int token_len, int *token_n, 
 	
 	*token_n = 0;
 	while (1) {
-		int n = nextchar(sockw, buff + buff_n); // TODO: handle errors
+		int n = nextchar(sockw, buff + buff_n);
 		if (n == -1 || n == 0) {
 			return n;
 		}
@@ -274,8 +271,4 @@ char *trap(char *root, char *path) { // TODO: implement this
 	char *out = (char *)malloc((strlen(root) + strlen(path) + 1) * sizeof(char));
 	strcpy(out, root);
 	return strcat(out, path);
-}
-
-int compatible(char *ver1, char *ver2) { // TODO: implement this
-	return 1;
 }
