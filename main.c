@@ -8,6 +8,9 @@
 #include <sys/socket.h>
 #include <netdb.h>
 
+#define IMPLEMENTS_IPV6
+// #define MULTITHREADED
+
 #define BACKLOG 10 
 #define BUFFER_LEN 256
 #define TOKEN_LEN 64
@@ -28,6 +31,7 @@ int getlistensock(int *sockfd, char *protocol, char *port);
 
 int validpath(char *path);
 char *trap(char *root, char *path);
+char *getmime(char *path);
 
 int main(int argc, char **argv) {
 	/* Read and verify command line arguments */
@@ -88,13 +92,22 @@ int main(int argc, char **argv) {
 			}
 
 			FILE *fp = fopen(trapped, "r");
-			free(trapped);
 			if (fp == NULL) { // TODO: implement code 403 (read permissions... what level should the program need?)
 				msg = "HTTP/1.0 404 File not found\r\n\r\n";
-				send(sockw->sockfd, msg, strlen(msg), 0);
+				send(sockw->sockfd, msg, strlen(msg), 0); // TODO: handle these send errors
 			} else {
-				msg = "HTTP/1.0 200 OK\r\n\r\n";
+				msg = "HTTP/1.0 200 OK\r\n";
 				send(sockw->sockfd, msg, strlen(msg), 0);
+
+				msg = "Content-Type: "; // TODO: some system of sending headers in general?
+				send(sockw->sockfd, msg, strlen(msg), 0);
+				msg = getmime(trapped);
+				free(trapped);
+				send(sockw->sockfd, msg, strlen(msg), 0);
+				free(msg);
+				msg = "\r\n\r\n";
+				send(sockw->sockfd, msg, strlen(msg), 0);
+
 				sendfile(sockw, fp);
 				fclose(fp);
 			}
@@ -316,4 +329,35 @@ char *trap(char *root, char *path) { // TODO: implement this
 	char *out = (char *)malloc((strlen(root) + strlen(path) + 1) * sizeof(char));
 	strcpy(out, root);
 	return strcat(out, path);
+}
+
+char *getmime(char *path) { // TODO: should this need to receive a valid path?
+	if (path == NULL) {
+		return NULL;
+	}
+
+	/* Find the file extension */
+	int len = strlen(path), i;
+	for (i = len - 1; i >= 0; i--) {
+		if (path[i] == '.') {
+			break;
+		}
+	}
+
+	char *mime;
+	if (strcmp(path + i, ".html") == 0) { // TODO: it would be nice if these were automatically loaded from a text file
+		mime = "text/html";
+	} else if (strcmp(path + i, ".jpg") == 0) {
+		mime = "image/pjpeg";
+	} else if (strcmp(path + i, ".css") == 0) {
+		mime = "text/css";
+	} else if (strcmp(path + i, ".js") == 0) {
+		mime = "text/javascript";
+	} else {
+		mime = "application/octet-stream";
+	}
+
+	char *out = (char *)malloc((strlen(mime) + 1) * sizeof(char)); // TODO: this seems silly... how do you send a string which can only be a few things?
+	strcpy(out, mime);
+	return out;
 }
