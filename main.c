@@ -9,11 +9,10 @@
 #include <netdb.h>
 
 #define IMPLEMENTS_IPV6
-// #define MULTITHREADED
 
 #define BACKLOG 10 
 #define BUFFER_LEN 256
-#define TOKEN_LEN 64
+#define TOKEN_LEN 256
 
 struct sockwrap {
 	int sockfd, buff_len, start, n;
@@ -62,16 +61,24 @@ int main(int argc, char **argv) {
 		/* Read in the request line */
 		char method[TOKEN_LEN + 1], file[TOKEN_LEN + 1], version[TOKEN_LEN + 1];
 		char *tokens[3] = {method, file, version}, *dels[3] = {" ", " ", "\r\n"}; // tokens and dels must be the same length
-		int tokens_len = 3;
+		int tokens_len = 3, valid = 1;
+
 		for (int i = 0; i < tokens_len; i++) {
-			int token_n;
-			if (nexttoken(sockw, tokens[i], TOKEN_LEN, &token_n, dels[i]) == -1) {
+			int token_n, n;
+			n = nexttoken(sockw, tokens[i], TOKEN_LEN, &token_n, dels[i]);
+			if (n == -1) {
 				perror("nexttoken");
 				freesockwrap(sockw);
 				close(newsockfd);
 				close(sockfd);
 				return 1;
 			}
+			/* Token too large */
+			if (n == 2) {
+				valid = 0;
+				break;
+			}
+
 			tokens[i][token_n] = '\0';
 		}
 
@@ -79,9 +86,11 @@ int main(int argc, char **argv) {
 	
 		/* Serve the request */
 		char *msg;
-		if (strcmp(method, "GET") != 0 || validpath(file) == 0 || strcmp(version, "HTTP/1.0") != 0) {
+
+		valid = valid && strcmp(method, "GET") == 0 && validpath(file) && strcmp(version, "HTTP/1.0") == 0;
+		if (!valid) {
 			msg = "HTTP/1.0 400 Invalid request\r\n\r\n";
-			send(sockw->sockfd, msg, strlen(msg), 0);
+			send(sockw->sockfd, msg, strlen(msg), 0); // TODO: all the response sends are unsafe
 		} else {
 			char *trapped = trap(root, file);
 			if (trapped == NULL) {
@@ -94,7 +103,7 @@ int main(int argc, char **argv) {
 			FILE *fp = fopen(trapped, "r");
 			if (fp == NULL) { // TODO: implement code 403 (read permissions... what level should the program need?)
 				msg = "HTTP/1.0 404 File not found\r\n\r\n";
-				send(sockw->sockfd, msg, strlen(msg), 0); // TODO: handle these send errors
+				send(sockw->sockfd, msg, strlen(msg), 0);
 			} else {
 				msg = "HTTP/1.0 200 OK\r\n";
 				send(sockw->sockfd, msg, strlen(msg), 0);
@@ -348,7 +357,7 @@ char *getmime(char *path) { // TODO: should this need to receive a valid path?
 	if (strcmp(path + i, ".html") == 0) { // TODO: it would be nice if these were automatically loaded from a text file
 		mime = "text/html";
 	} else if (strcmp(path + i, ".jpg") == 0) {
-		mime = "image/pjpeg";
+		mime = "image/jpeg";
 	} else if (strcmp(path + i, ".css") == 0) {
 		mime = "text/css";
 	} else if (strcmp(path + i, ".js") == 0) {
