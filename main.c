@@ -11,8 +11,8 @@
 #define IMPLEMENTS_IPV6
 
 #define BACKLOG 10 
-#define BUFFER_LEN 256
-#define TOKEN_LEN 256
+#define BUFFER_LEN 512
+#define TOKEN_LEN 512
 
 struct sockwrap {
 	int sockfd, buff_len, start, n;
@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
 				close(sockfd);
 				return 1;
 			}
-
+			printf("%s\n", trapped);
 			FILE *fp = fopen(trapped, "r");
 			if (fp == NULL) { // TODO: implement code 403 (read permissions... what level should the program need?)
 				msg = "HTTP/1.0 404 File not found\r\n\r\n";
@@ -333,11 +333,56 @@ int getlistensock(int *sockfd, char *protocol, char *port) {
 int validpath(char *path) { // TODO: implement this
 	return 1;
 }
-
+/*
 char *trap(char *root, char *path) { // TODO: implement this
 	char *out = (char *)malloc((strlen(root) + strlen(path) + 1) * sizeof(char));
 	strcpy(out, root);
 	return strcat(out, path);
+}
+*/
+
+char *trap(char *root, char *path) {
+	int rlen = strlen(root), plen = strlen(path);
+	char *out = (char *)malloc((rlen + plen + 1) * sizeof(char));
+
+	strcpy(out, root);
+	strcat(out, path);
+
+	enum pattern {BLANK, REG, DOT, DDOT};
+	enum pattern pat = BLANK;
+	int depth = 0;
+
+	for (int i = rlen, j = rlen; i < rlen + plen + 1; i++) {
+		/* Copy out into itself... some ../ 's will be removed in the process */
+		out[j] = out[i];
+		j++;
+
+		if (out[i] == '/') {
+			if (pat == REG) {
+				depth++;
+			} else if (pat == DDOT) {
+				if (depth > 0) {
+					depth--;
+				} else {
+					/* Ignore the last ../ */
+					j -= 3;
+				}
+			}
+			pat = BLANK;
+		} else if (out[i] == '.') {
+			if (pat == BLANK) {
+				pat = DOT;
+			} else if (pat == DOT) {
+				pat = DDOT;
+			} else if (pat == DDOT) {
+				pat = REG;
+			}
+		} else {
+			pat = REG;
+		}
+	}
+
+	return out;
 }
 
 char *getmime(char *path) { // TODO: should this need to receive a valid path?
