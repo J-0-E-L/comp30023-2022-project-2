@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall
+CFLAGS = -Wall -lpthread
 OUT = server
 OBJ = main.o sockwrap.o
 
