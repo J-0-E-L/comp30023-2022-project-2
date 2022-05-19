@@ -73,11 +73,11 @@ int main(int argc, char **argv) {
 		
 		/* Create a new thread to deal with the connection */
 		struct context *cont = (struct context *)malloc(sizeof(struct context));
+		assert(cont);
 		cont->sockfd = newsockfd;
 		cont->root = root;
-		assert(cont);
 		pthread_t tid;
-		if (pthread_create(&tid, NULL, serverequest, &cont) != 0) {
+		if (pthread_create(&tid, NULL, serverequest, cont) != 0) {
 			return 1;
 		}
 		pthread_mutex_lock(&lock);
@@ -95,6 +95,7 @@ void *serverequest(void *arg) {
 	char *root = cont->root;
 
 	struct sockwrap *sockw = initsockwrap(sockfd, BUFFER_LEN);
+	assert(sockw);
 
 	/* Read in the request line */
 	char method[TOKEN_LEN + 1], file[TOKEN_LEN + 1], version[TOKEN_LEN + 1];
