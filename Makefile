@@ -1,10 +1,12 @@
 CC = gcc
-CFLAGS = -Wall -lpthread
+CFLAGS = -Wall
 OUT = server
+HEAD = sockwrap.h
 OBJ = main.o sockwrap.o
+LIB = -lpthread
 
-server: $(OBJ)
-	$(CC) $(CFLAGS) -o $(OUT) $(OBJ)
+server: $(OBJ) $(HEAD)
+	$(CC) $(CFLAGS) -o $(OUT) $(OBJ) $(LIB)
 
 clean:
 	rm -f $(OBJ) $(OUT)
