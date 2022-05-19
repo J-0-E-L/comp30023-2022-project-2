@@ -72,7 +72,8 @@ int main(int argc, char **argv) {
 		}
 		
 		/* Create a new thread to deal with the connection */
-		struct context cont = {.sockfd = newsockfd, .root = root};
+		struct context *cont = (struct context *)malloc(sizeof(struct context));
+		assert(cont);
 		pthread_t tid;
 		if (pthread_create(&tid, NULL, serverequest, &cont) != 0) {
 			return 1;
@@ -148,6 +149,7 @@ void *serverequest(void *arg) {
 
 	freesockwrap(sockw);
 	close(sockfd);
+	free(cont);
 	pthread_mutex_lock(&lock);
 	tcount--;
 	pthread_mutex_unlock(&lock);
