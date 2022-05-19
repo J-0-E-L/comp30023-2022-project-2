@@ -7,23 +7,25 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <pthread.h>
+#include <assert.h>
+
+#include "sockwrap.h"
 
 #define IMPLEMENTS_IPV6
+#define MULTITHREADED
 
-#define BACKLOG 10 
-#define BUFFER_LEN 512
-#define TOKEN_LEN 512
+#define QUEUE_NUM 10 
+#define WORKER_NUM 8
+#define BUFFER_LEN 4096
+#define TOKEN_LEN 1024
 
-struct sockwrap {
-	int sockfd, buff_len, start, n;
-	char *buff;
+struct context {
+	int sockfd;
+	char *root;
 };
 
-struct sockwrap *initsockwrap(int sockfd, int buff_len);
-int freesockwrap(struct sockwrap *sockw);
-int nextchar(struct sockwrap *sockw, char *c);
-int nexttoken(struct sockwrap *sockw, char *token, int token_len, int *token_n, char *del);
-int sendfile(struct sockwrap *sockw, FILE *fp);
+void *serverequest(void *arg);
 
 int getargs(int argc, char **argv, char **protocol, char **port, char **root);
 int getlistensock(int *sockfd, char *protocol, char *port);
@@ -31,6 +33,10 @@ int getlistensock(int *sockfd, char *protocol, char *port);
 int validpath(char *path);
 char *trap(char *root, char *path);
 char *getmime(char *path);
+
+/* For keeping track of threads */
+int tcount = 0;
+pthread_mutex_t lock;
 
 int main(int argc, char **argv) {
 	/* Read and verify command line arguments */
@@ -45,194 +51,108 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
+	/* Initialise our mutex */
+	if (pthread_mutex_init(&lock, NULL) != 0) {
+		return 1;
+	}
+
 	while (1) {
+		/* Do not accept new connections when we are busy */
+		if (tcount >= WORKER_NUM) {
+			continue;
+		}
+
 		/* Accept incoming connections */
 		int newsockfd;
 		struct sockaddr_storage addr;
 		socklen_t socklen = sizeof(struct sockaddr_storage);
 		if ((newsockfd = accept(sockfd, (struct sockaddr *)&addr, &socklen)) == -1) {
 			perror("accept");
-			close(sockfd);
 			return 1;
 		}
 		
-		struct sockwrap *sockw = initsockwrap(newsockfd, BUFFER_LEN);
-
-		/* Read in the request line */
-		char method[TOKEN_LEN + 1], file[TOKEN_LEN + 1], version[TOKEN_LEN + 1];
-		char *tokens[3] = {method, file, version}, *dels[3] = {" ", " ", "\r\n"}; // tokens and dels must be the same length
-		int tokens_len = 3, valid = 1;
-
-		for (int i = 0; i < tokens_len; i++) {
-			int token_n, n;
-			n = nexttoken(sockw, tokens[i], TOKEN_LEN, &token_n, dels[i]);
-			if (n == -1) {
-				perror("nexttoken");
-				freesockwrap(sockw);
-				close(newsockfd);
-				close(sockfd);
-				return 1;
-			}
-			/* Token too large */
-			if (n == 2) {
-				valid = 0;
-				break;
-			}
-
-			tokens[i][token_n] = '\0';
+		/* Create a new thread to deal with the connection */
+		struct context cont = {.sockfd = newsockfd, .root = root};
+		pthread_t tid;
+		if (pthread_create(&tid, NULL, serverequest, &cont) != 0) {
+			return 1;
 		}
-
-		// TODO: at least look at the headers
-	
-		/* Serve the request */
-		char *msg;
-
-		valid = valid && strcmp(method, "GET") == 0 && validpath(file) && strcmp(version, "HTTP/1.0") == 0;
-		if (!valid) {
-			msg = "HTTP/1.0 400 Invalid request\r\n\r\n";
-			send(sockw->sockfd, msg, strlen(msg), 0); // TODO: all the response sends are unsafe
-		} else {
-			char *trapped = trap(root, file);
-			if (trapped == NULL) {
-				freesockwrap(sockw);
-				close(newsockfd);
-				close(sockfd);
-				return 1;
-			}
-			printf("%s\n", trapped);
-			FILE *fp = fopen(trapped, "r");
-			if (fp == NULL) { // TODO: implement code 403 (read permissions... what level should the program need?)
-				msg = "HTTP/1.0 404 File not found\r\n\r\n";
-				send(sockw->sockfd, msg, strlen(msg), 0);
-			} else {
-				msg = "HTTP/1.0 200 OK\r\n";
-				send(sockw->sockfd, msg, strlen(msg), 0);
-
-				msg = "Content-Type: "; // TODO: some system of sending headers in general?
-				send(sockw->sockfd, msg, strlen(msg), 0);
-				msg = getmime(trapped);
-				free(trapped);
-				send(sockw->sockfd, msg, strlen(msg), 0);
-				free(msg);
-				msg = "\r\n\r\n";
-				send(sockw->sockfd, msg, strlen(msg), 0);
-
-				sendfile(sockw, fp);
-				fclose(fp);
-			}
-		}
-
-		freesockwrap(sockw);
-		close(newsockfd);
+		pthread_mutex_lock(&lock);
+		tcount++;
+		pthread_mutex_unlock(&lock);
 	}
-	close(sockfd);
+
+	/* We should never get here */
 	return 0;
 }
 
-struct sockwrap *initsockwrap(int sockfd, int buff_len) {
-	struct sockwrap *sockw = (struct sockwrap *)malloc(sizeof(struct sockwrap));
-	if (sockw == NULL) {
-		return NULL;
-	}
+void *serverequest(void *arg) {
+	struct context *cont = (struct context *)arg;
+	int sockfd = cont->sockfd;
+	char *root = cont->root;
 
-	char *buff = (char *)malloc(buff_len * sizeof(char));
-	if (buff == NULL) {
-		free(sockw);
-		return NULL;
-	}
+	struct sockwrap *sockw = initsockwrap(sockfd, BUFFER_LEN);
 
-	sockw->sockfd = sockfd;
-	sockw->buff_len = buff_len;
-	sockw->start = 0;
-	sockw->n = 0;
-	sockw->buff = buff;
-	return sockw;
-}
+	/* Read in the request line */
+	char method[TOKEN_LEN + 1], file[TOKEN_LEN + 1], version[TOKEN_LEN + 1];
+	char *tokens[3] = {method, file, version}, *dels[3] = {" ", " ", "\r\n"}; // tokens and dels must be the same length
+	int tokens_len = 3, valid = 1;
 
-int freesockwrap(struct sockwrap *sockw) {
-	int sockfd = sockw->sockfd;
-	free(sockw->buff);
-	free(sockw);
-	return sockfd;
-}
-
-/* -1: error, 0: disconnect, 1: character received */
-int nextchar(struct sockwrap *sockw, char *c) {
-	/* Get more data when the buffer is empty */
-	if (sockw->n == 0) {
-		int n = recv(sockw->sockfd, sockw->buff, sockw->buff_len, 0);
-		if (n == -1 || n == 0) { 
-			return n;
+	for (int i = 0; i < tokens_len; i++) {
+		int n = recvstr(sockw, tokens[i], TOKEN_LEN, dels[i]);
+		if (n == -1) {
+			perror("recvstr");
+			freesockwrap(sockw);
+			close(sockfd);
+			pthread_mutex_lock(&lock);
+			tcount--;
+			pthread_mutex_unlock(&lock);
+			return NULL;
 		}
-		sockw->start = 0;
-		sockw->n = n;
-	}
-	
-	/* Return the first character in the buffer */
-	*c = sockw->buff[sockw->start];
-	sockw->start++; // TODO: should we leave this index out of range if we read the entire buffer?
-	sockw->n--;
-	return 1;
-}
-
-/* -1: error, 0: disconnect, 1: token received, 2: token too large */
-int nexttoken(struct sockwrap *sockw, char *token, int token_len, int *token_n, char *del) {
-	int buff_len = strlen(del), buff_n = 0;
-	char *buff = (char *)malloc(buff_len * sizeof(char)); // TODO: should the size of del be limited to TOKEN_LEN? if so use a static buffer
-	if (buff == NULL) {
-		return -1;
-	}
-	
-	*token_n = 0;
-	while (1) {
-		int n = nextchar(sockw, buff + buff_n);
-		if (n == -1 || n == 0) {
-			return n;
+		/* Token too large */
+		if (n == 2) {
+			valid = 0;
+			break;
 		}
-		buff_n++;
+	}
 
-		if (buff[buff_n - 1] == del[buff_n - 1]) {
-			/* Found the delimeter */
-			if (buff_n == buff_len) {
-				free(buff);
-				return 1;
-			}
+	// TODO: at least look at the headers
+
+	/* Serve the request */
+	valid = valid && strcmp(method, "GET") == 0 && validpath(file) && strcmp(version, "HTTP/1.0") == 0;
+	if (!valid) {
+		sendstr(sockw, "HTTP/1.0 400 Invalid request\r\n\r\n");
+	} else {
+		char *trapped = trap(root, file);
+		assert(trapped);
+
+		FILE *fp = fopen(trapped, "r");
+		if (fp == NULL) { // TODO: implement code 403 (read permissions... what level should the program need?)
+			sendstr(sockw, "HTTP/1.0 404 File not found\r\n\r\n");
+			free(trapped);
 		} else {
-			/* The received token is too long */
-			if (*token_n + buff_n > token_len) {
-				free(buff);
-				return 2;
-			}
-			/* Move the buffer into the token */
-			for (int i = 0; i < buff_n; i++) {
-				token[*token_n + i] = buff[i];
-			}
-			*token_n += buff_n;
-			buff_n = 0;
-		}
-	}
-	/* We should never get here */
-	return -1;
-}
+			sendstr(sockw, "HTTP/1.0 200 OK\r\n");
+			sendstr(sockw, "Content-Type: ");
+			
+			char *mime = getmime(trapped);
+			assert(mime);
+			free(trapped);
+			sendstr(sockw, mime);
+			free(mime);
+			sendstr(sockw, "\r\n\r\n");
 
-/* -1: error, 1: file sent */
-int sendfile(struct sockwrap *sockw, FILE *fp) {
-	char buff[BUFFER_LEN]; // TODO: should sockwrap contain an out buffer?
-	int nread;
-	while ((nread = fread(buff, sizeof(char), BUFFER_LEN, fp)) > 0) { // TODO: is it dangerous to use a 0 character read to indicate EOF?
-		int ntosend = nread;
-		/* Make sure everything is sent */
-		while (ntosend > 0) {
-			int nsent = send(sockw->sockfd, buff, nread, 0);
-			if (nsent == -1) {
-				perror("sendfile");
-				return -1;
-			}
-			ntosend -= nsent;
+			sendfile(sockw, fp);
+			fclose(fp);
 		}
 	}
-	// TODO: is there a way of detecting errors in fread?
-	return 1;
+
+	freesockwrap(sockw);
+	close(sockfd);
+	pthread_mutex_lock(&lock);
+	tcount--;
+	pthread_mutex_unlock(&lock);
+
+	return NULL;
 }
 
 int getargs(int argc, char **argv, char **protocol, char **port, char **root) {
@@ -319,7 +239,7 @@ int getlistensock(int *sockfd, char *protocol, char *port) {
 	}
 	
 	/* Get ready to receive connections */
-	if (listen(newsockfd, BACKLOG) == -1) {
+	if (listen(newsockfd, QUEUE_NUM) == -1) {
 		perror("listen");
 		close(newsockfd);
 		return 1;
@@ -333,13 +253,6 @@ int getlistensock(int *sockfd, char *protocol, char *port) {
 int validpath(char *path) { // TODO: implement this
 	return 1;
 }
-/*
-char *trap(char *root, char *path) { // TODO: implement this
-	char *out = (char *)malloc((strlen(root) + strlen(path) + 1) * sizeof(char));
-	strcpy(out, root);
-	return strcat(out, path);
-}
-*/
 
 char *trap(char *root, char *path) {
 	int rlen = strlen(root), plen = strlen(path);
@@ -361,6 +274,7 @@ char *trap(char *root, char *path) {
 			if (pat == REG) {
 				depth++;
 			} else if (pat == DDOT) {
+				/* Do we escape from the root? */
 				if (depth > 0) {
 					depth--;
 				} else {
@@ -369,6 +283,7 @@ char *trap(char *root, char *path) {
 				}
 			}
 			pat = BLANK;
+		/* Update the pattern of the current folder/file */
 		} else if (out[i] == '.') {
 			if (pat == BLANK) {
 				pat = DOT;
