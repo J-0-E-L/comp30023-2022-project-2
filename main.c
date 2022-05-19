@@ -73,6 +73,8 @@ int main(int argc, char **argv) {
 		
 		/* Create a new thread to deal with the connection */
 		struct context *cont = (struct context *)malloc(sizeof(struct context));
+		cont->sockfd = newsockfd;
+		cont->root = root;
 		assert(cont);
 		pthread_t tid;
 		if (pthread_create(&tid, NULL, serverequest, &cont) != 0) {
